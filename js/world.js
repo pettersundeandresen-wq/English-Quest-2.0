@@ -49,25 +49,33 @@ export function tile(x,y){return grid[Math.floor(y)]?.[Math.floor(x)]||'water'}
 export function walkable(x,y){return !['water','tree','rock'].includes(tile(x,y))}
 export function region(x,y){if(x>115&&y>72)return 'Steinruinene';if(y>75)return 'Den magiske lysningen';if(x>77)return 'Elvedalen';if(y>32||x>33)return 'Den ville skogen';return 'Landsbyen'}
 import { asset, pattern, ready } from './graphics.js';
-const dims={oak:[155,150],spruce:[112,155],birch:[145,157],blossom:[157,148],bush:[79,62],rock:[90,62]};
+const dims={tree_oak:[155,150],tree_spruce:[112,155],tree_birch:[145,157],tree_blossom:[157,148],bush_berries:[79,62],rock_moss:[90,62]};
 const questArt=['chest','crystal','runestone','magic_book','quest_board','magic_mushroom','locked_gate','star_altar'];
 const buildingArt={home:'building_home',library:'building_library',maze:'building_school',tower:'building_wizard_tower',cave:'building_castle',shop:'building_shop',school:'building_school',castle:'building_castle'};
 const artType=t=>({chest:0,crystal:1,rune:2,bell:3,portal:4})[t]??0;
 export function drawWorld(ctx,camera,time,done){
  const w=ctx.canvas.width,h=ctx.canvas.height;
- ctx.fillStyle=pattern(ctx,'grass')||'#7cad6a';ctx.fillRect(0,0,w,h);
+ // Draw terrain in world coordinates so its texture follows camera movement.
+ ctx.save();
+ ctx.translate(-camera.x,-camera.y);
+ ctx.fillStyle=pattern(ctx,'grass')||'#7cad6a';
+ ctx.fillRect(camera.x,camera.y,w,h);
+ ctx.restore();
  const x0=Math.max(0,Math.floor(camera.x/TILE)-5),x1=Math.min(W,Math.ceil((camera.x+w)/TILE)+5);
  const y0=Math.max(0,Math.floor(camera.y/TILE)-5),y1=Math.min(H,Math.ceil((camera.y+h)/TILE)+5);
  const draw=[];
  for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++){
   const t=grid[y][x],px=x*TILE-camera.x,py=y*TILE-camera.y,q=rand(x,y);
   if(t==='path'||t==='water'){
+    ctx.save();
+    ctx.translate(-camera.x,-camera.y);
     ctx.fillStyle=pattern(ctx,t==='path'?'path':'water')||(t==='path'?'#c49a60':'#298ca5');
-    ctx.fillRect(px,py,TILE+1,TILE+1);
+    ctx.fillRect(x*TILE,y*TILE,TILE+1,TILE+1);
+    ctx.restore();
   }
   if(t==='tree'||t==='rock'||t==='bush'){
     const species=x<33?'birch':x<70?'spruce':x<106?'oak':x<143?'blossom':'spruce';
-    const type=t==='tree'?species:t==='rock'?'rock':'bush';
+    const type=t==='tree'?'tree_'+species:t==='rock'?'rock_moss':'bush_berries';
     draw.push({kind:'nature',type,x:(x+.5)*TILE-camera.x,y:(y+.9)*TILE-camera.y,depth:y+.9});
   }
   if(t==='grass'&&q>.982){const d=x>100&&x<145?'detail_pink_flowers':x<70?'detail_daisies':'detail_fern';draw.push({kind:'detail',type:d,x:(x+.5)*TILE-camera.x,y:(y+.85)*TILE-camera.y,depth:y+.85});}
