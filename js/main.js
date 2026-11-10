@@ -5,7 +5,7 @@ import { drawPlayer } from './player.js';
 import { load, save, clear } from './save.js';
 import { showBook } from './dictionary.js';
 import { runChallenge } from './challenges.js';
-import { interiors, indoorDefinitions, indoorObjects, indoorWalkable, drawInterior, drawInteriorFurniture } from './interiors.js';
+import { interiors, indoorDefinitions, indoorObjects, allIndoorQuests, indoorWalkable, drawInterior, drawInteriorFurniture } from './interiors.js';
 import { entrances } from './world.js';
 import { homeMap } from './interiors.js';
 import { showHomeShop, drawHomeDetails } from './home.js';
@@ -21,7 +21,14 @@ state.coins ??= 0;
 state.scene ??= 'outdoor';
 if(state.scene !== 'outdoor' && !interiors[state.scene])state.scene='outdoor';
 state.outdoorPosition ??= {x:7,y:7};
-state.cooldowns ??= {}; // Lagrer feilbesvarte oppgaver og hvilke andre verb som er forsøkt.
+state.cooldowns ??= {};
+// Migrer gamle type-spesifikke sperrer uten å miste eksisterende progresjon.
+for(const [key,lock] of Object.entries({...state.cooldowns})){
+ if(!key.includes(':'))continue;
+ const id=key.split(':')[0], old=state.cooldowns[id];
+ if(!old || (old.otherVerbs||[]).length>(lock.otherVerbs||[]).length)state.cooldowns[id]=lock;
+ delete state.cooldowns[key];
+} // Lagrer feilbesvarte oppgaver og hvilke andre verb som er forsøkt.
 
 const $ = id => document.getElementById(id);
 const canvas = $('game');
@@ -30,11 +37,12 @@ const modal = $('modal');
 const player = { x: state.position.x, y: state.position.y };
 let scene=state.scene;
 if(scene==='outdoor' && (player.x<2||player.y<2||player.x>179||player.y>129||!walkable(player.x,player.y))){player.x=7;player.y=7;}
-const allObjects=[...objects,...indoorObjects];
+const allObjects=[...objects,...allIndoorQuests];
 const getSceneObjects=()=>scene==='outdoor'?objects:interiors[scene].objects;
 const currentRegion=()=>scene==='outdoor'?region(player.x,player.y):interiors[scene].name;
 const keys = new Set();
 let modalOpen = false;
+let mapOpen = false;
 let near = null;
 let prev = 0;
 let lastSave = 0;
@@ -44,10 +52,10 @@ let lastArea = '';
 // FEM ANDRE VERBOPPGAVER MELLOM TO FORSØK
 // --------------------------------------------------
 const REQUIRED_OTHER_VERBS = 5;
-const taskKey = (id, type) => `${id}:${type}`;
+const taskKey = (id, type) => String(id); // One lock per verb, regardless of challenge type.
 
 function remainingLock(id, type) {
-    const lock = state.cooldowns[taskKey(id, type)];
+    const lock = state.cooldowns[taskKey(id)] || state.cooldowns[`${id}:${type}`];
     if (!lock) return 0;
     const distinct = new Set((lock.otherVerbs || []).map(String));
     return Math.max(0, REQUIRED_OTHER_VERBS - distinct.size);
@@ -58,7 +66,7 @@ function registerAnswer(id, type, correct) {
     // Ett besvart spørsmål teller for alle andre aktive sperrer.
     // Samme verb teller aldri mer enn én gang for en gitt sperre.
     for (const [key, lock] of Object.entries(state.cooldowns)) {
-        if (key === taskKey(id, type)) continue;
+        if (key === taskKey(id)) continue;
         const lockedVerbId = key.split(':')[0];
         if (lockedVerbId === currentId) continue;
         lock.otherVerbs ??= [];
@@ -69,9 +77,10 @@ function registerAnswer(id, type, correct) {
             delete state.cooldowns[key];
         }
     }
-    const key = taskKey(id, type);
+    const key = taskKey(id);
     if (correct) {
         delete state.cooldowns[key];
+        for (const old of Object.keys(state.cooldowns)) if (old.startsWith(currentId+':')) delete state.cooldowns[old];
     } else {
         // Feil på nytt starter en ny sperre på fem andre verb.
         state.cooldowns[key] = { otherVerbs: [] };
@@ -79,6 +88,13 @@ function registerAnswer(id, type, correct) {
     persist();
 }
 
+function questStatus(p){
+ const remaining=remainingLock(p.id,p.type);
+ if(remaining)return {kind:'cooldown',remaining};
+ if(Number(state.mastery[p.id]||0)>=5)return {kind:'done',remaining:0};
+ if(state.done[p.id])return {kind:'retry',remaining:0};
+ return {kind:'new',remaining:0};
+}
 function lockMessage(remaining, returnToBook = null) {
     openModal(`
         <h2>⏳ Prøv igjen litt senere</h2>
@@ -183,7 +199,8 @@ const areas = [
 ];
 const areaObjects = new Map(areas.map(a => [a.name, []]));
 for (const obj of allObjects) {
-    const name = obj.id >= 124 ? indoorDefinitions[Math.floor((obj.id-124)/14)].name : region(obj.x + 0.5, obj.y + 0.5);
+    const indoorRoom=obj.id>=124?Object.values(interiors).find(m=>m.objects.some(p=>p.id===obj.id)):null;
+    const name = indoorRoom?indoorRoom.name:region(obj.x + 0.5, obj.y + 0.5);
     if (!areaObjects.has(name)) areaObjects.set(name, []);
     areaObjects.get(name).push(obj);
 }
@@ -252,15 +269,12 @@ function leaveScene(){
 function interact() {
     if (modalOpen || !near) return;
     if(near.kind==='entrance'){enterScene(near.id);return;}
-    if(near.kind==='shop'){showHomeShop(openModal,state,()=>{persist();updateHUD();});return;}
+    if(near.kind==='shop' && scene==='shop'){showHomeShop(openModal,state,()=>{persist();updateHUD();});return;}
     if(near.kind==='exit'){leaveScene();return;}
     const p = near;
-    if (state.done[p.id]) {
-        openModal(`<h2>✅ Allerede fullført</h2>
-            <p>Du har løst denne utfordringen. Øv videre i ordboken!</p>
-            <button class="primary" id="okay">Tilbake</button>`);
-        $('okay').onclick = closeModal;
-        return;
+    if (state.done[p.id] && Number(state.mastery[p.id] || 0) >= 5) {
+        openModal(`<h2>⭐ Mestret!</h2><p>Du har fått alle fem stjernene på dette verbet.</p><button class="primary" id="okay">Tilbake</button>`);
+        $('okay').onclick = closeModal;return;
     }
     const remaining = remainingLock(p.id, p.type);
     if (remaining) {
@@ -269,16 +283,20 @@ function interact() {
     }
     const v = verbs[p.id];
     if (!v) return;
-    runChallenge(openModal, closeModal, v, p.type, ok => {
-        registerAnswer(v.id, p.type, ok);
+    const challengeType = state.done[p.id]
+        ? ['chest','crystal','rune','bell','portal'][Math.min(4,Number(state.mastery[p.id]||0))]
+        : p.type;
+    const retry = remainingLock(p.id, challengeType);
+    if(retry){lockMessage(retry);return;}
+    runChallenge(openModal, closeModal, v, challengeType, ok => {
+        registerAnswer(v.id, challengeType, ok);
         if (ok) {
+            const first = !state.done[p.id];
             state.done[p.id] = true;
             state.found[p.id] = true;
-            state.mastery[p.id] = Math.min(5, (state.mastery[p.id] || 0) + 1);
-            state.coins += 10 + (p.type === 'portal' ? 15 : 0);
-        } else {
-            state.coins += 1;
-        }
+            state.mastery[p.id] = Math.min(5, Number(state.mastery[p.id] || 0) + 1);
+            state.coins += first ? 15 : 8;
+        } else state.coins += 1;
         persist();
         updateHUD();
     });
@@ -329,6 +347,7 @@ const directions = {
     arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right'
 };
 window.addEventListener('keydown', e => {
+    if (mapOpen && e.key === 'Escape') { document.querySelector('.mapOverlay')?.remove(); mapOpen=false; return; }
     if (modalOpen) {
         if (e.key === 'Escape') closeModal();
         return;
@@ -349,7 +368,7 @@ function loop(now) {
     const dt = Math.min(0.045, (now - prev) / 1000 || 0);
     prev = now;
     let moving = false;
-    if (!modalOpen) {
+    if (!modalOpen && !mapOpen) {
         let dx = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0) + joystickX;
         let dy = (keys.has('down') ? 1 : 0) - (keys.has('up') ? 1 : 0) + joystickY;
         if (dx || dy) {
@@ -376,8 +395,8 @@ function loop(now) {
         y:Math.max(0,Math.min(Math.max(0,map.h*TILE-viewH),player.y*TILE-viewH/2))
     };
     ctx.save();ctx.scale(ZOOM,ZOOM);
-    if(scene==='outdoor')drawWorld(ctx,cam,now,state.done);
-    else drawInterior(ctx,cam,now,interiors[scene],state.done,TILE);
+    if(scene==='outdoor')drawWorld(ctx,cam,now,state.done,questStatus);
+    else drawInterior(ctx,cam,now,interiors[scene],state.done,TILE,questStatus);
     if(scene!=='outdoor')drawInteriorFurniture(ctx,cam,interiors[scene],TILE);
     if(scene==='home')drawHomeDetails(ctx,cam,state,TILE);
     drawPlayer(ctx, player.x, player.y, cam, now, moving);
@@ -395,7 +414,7 @@ function loop(now) {
             if(distance<best){best=distance;near={kind:'entrance',...e};}
         }
     }else{
-        if(scene==='home'||scene==='shop'){const d=Math.hypot(player.x-18.5,player.y-13.5);if(d<best){best=d;near={kind:'shop'};}}
+        if(scene==='shop'){const d=Math.hypot(player.x-18.5,player.y-13.5);if(d<best){best=d;near={kind:'shop'};}}
         const e=interiors[scene].exit;
         const distance=Math.hypot(player.x-e.x-.5,player.y-e.y-.5);
         if(distance<best){best=distance;near={kind:'exit'};}
@@ -408,8 +427,8 @@ function loop(now) {
         ? 'Utforsk kartet og finn lysende gjenstander'
         : near.kind==='entrance' ? `🚪 Gå inn: ${near.name} · trykk Undersøk`
         : near.kind==='exit' ? '🚪 Gå ut til verden · trykk Undersøk'
-        : near.kind==='shop' ? '🛒 Pynt hjemmet · trykk Undersøk'
-        : (state.done[near.id] ? '✓ Fullført' :
+        : near.kind==='shop' ? '🛒 Handle ved butikkdisken · trykk Undersøk'
+        : (state.done[near.id] ? (Number(state.mastery[near.id]||0)>=5?'⭐ Mestret':'⭐ Øv videre') :
             remainingLock(near.id,near.type)
                 ? `⏳ ${remainingLock(near.id,near.type)} andre oppgaver igjen`
                 : '✨ Ny utfordring')+' : '+(names[near.type]||'oppgave')+' · trykk Undersøk';
@@ -431,7 +450,7 @@ loadGraphics().then(()=>requestAnimationFrame(loop));
 function showWorldMap(){
  const holder=document.createElement('div');holder.className='mapOverlay';
  holder.innerHTML='<div class="mapCard"><button id="closeWorldMap" class="pill">Lukk kart ✕</button><h2>🗺️ English Quest 2.0</h2><canvas id="overviewCanvas" width="720" height="520"></canvas><p>Blå markør = deg · Gule punkter = oppgaver · Røde hus = bygninger</p></div>';
- document.body.appendChild(holder);holder.onclick=e=>{if(e.target===holder||e.target.id==='closeWorldMap')holder.remove()};
+ document.body.appendChild(holder);mapOpen=true;keys.clear();resetJoystick();holder.onclick=e=>{if(e.target===holder||e.target.id==='closeWorldMap'){holder.remove();mapOpen=false;}};
  const c=holder.querySelector('canvas'),g=c.getContext('2d'),sx=c.width/W,sy=c.height/H;
  for(let y=0;y<H;y++)for(let x=0;x<W;x++){const t=tile(x,y);g.fillStyle=t==='water'?'#4c9fb9':t==='path'?'#ddc18c':t==='tree'?'#438057':t==='rock'?'#8c9586':'#a4c78a';g.fillRect(x*sx,y*sy,sx+1,sy+1)}
  for(const o of objects){g.fillStyle=state.done[o.id]?'#4a9659':'#f6d36a';g.fillRect(o.x*sx-2,o.y*sy-2,4,4)}
@@ -439,4 +458,4 @@ function showWorldMap(){
  if(scene==='outdoor'){g.beginPath();g.arc(player.x*sx,player.y*sy,6,0,7);g.fillStyle='#2867df';g.fill();g.strokeStyle='#fff';g.lineWidth=2;g.stroke()}
 }
 document.getElementById('mapBtn')?.addEventListener('click',showWorldMap);
-window.addEventListener('keydown',e=>{if(e.key.toLowerCase()==='m'&&!modalOpen&&!document.querySelector('.mapOverlay')){e.preventDefault();showWorldMap()}});
+window.addEventListener('keydown',e=>{if(e.key.toLowerCase()==='m'&&!modalOpen&&!mapOpen){e.preventDefault();showWorldMap()}});

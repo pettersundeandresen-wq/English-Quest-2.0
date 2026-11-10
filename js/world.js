@@ -44,6 +44,57 @@ for(const c of candidates){if(objects.length>=124)break;
  objects.push({...c,id:objects.length,type:['chest','crystal','rune','bell','portal'][objects.length%5]});carve(c.x,c.y,1,'clearing');
 }
 if(objects.length!==124)throw new Error('Not enough quest positions: '+objects.length);
+// User-drawn forest corridors: grass, not dirt paths. Coordinates follow the map sketch.
+// These are applied AFTER stable quest positions have been assigned.
+const forestCorridors = [
+ [[7,48],[12,54],[16,65]],
+ [[29,53],[49,53],[70,53],[92,58],[102,62]],
+ [[30,73],[37,78],[44,83],[46,92]],
+ [[40,79],[54,76],[65,69],[69,58]],
+ [[70,52],[72,66],[66,73],[54,75]],
+ [[88,90],[93,81],[99,71],[101,58],[97,50]],
+ [[96,48],[106,41],[101,34],[97,30]],
+ [[132,54],[138,45],[137,37],[146,48]],
+ [[137,37],[146,44]],
+ [[112,14],[124,7],[136,8],[143,16]],
+ [[52,34],[62,26],[69,25]],
+ [[28,118],[36,113],[42,108],[48,114],[56,116]]
+];
+function grassDisk(cx,cy,r){
+ for(let y=Math.max(1,Math.floor(cy-r));y<Math.min(H-1,Math.ceil(cy+r)+1);y++)
+  for(let x=Math.max(1,Math.floor(cx-r));x<Math.min(W-1,Math.ceil(cx+r)+1);x++)
+   if(Math.hypot(x-cx,y-cy)<=r && ['tree','rock','bush'].includes(grid[y][x]))grid[y][x]='grass';
+}
+function grassCorridor(points,r=2.3){
+ for(let i=1;i<points.length;i++){
+  const a=points[i-1],b=points[i],steps=Math.ceil(Math.hypot(a[0]-b[0],a[1]-b[1])*4);
+  for(let j=0;j<=steps;j++){const t=j/steps;grassDisk(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,r);}
+ }
+}
+forestCorridors.forEach((points,i)=>grassCorridor(points,i===3||i===4?3.5:2.6));
+// Large woodland clearings, with a few existing quests relocated inside.
+const woodlandClearings=[[65,70,8],[52,77,7],[98,57,6],[135,43,5]];
+for(const [x,y,r] of woodlandClearings)grassDisk(x,y,r);
+const clearingQuests=objects.filter(o=>o.id>=90).slice(0,8);
+const targetSpots=[[62,67],[68,73],[49,75],[55,80],[95,55],[102,60],[133,41],[138,46]];
+clearingQuests.forEach((o,i)=>{o.x=targetSpots[i][0];o.y=targetSpots[i][1];grassDisk(o.x,o.y,3);});
+// Clear visible, walkable spaces around all quests and building entrances.
+// Do not change IDs or positions: saved progress remains compatible.
+for(const o of objects){
+ for(let yy=Math.max(1,o.y-3);yy<=Math.min(H-2,o.y+3);yy++)
+  for(let xx=Math.max(1,o.x-3);xx<=Math.min(W-2,o.x+3);xx++)
+   if(Math.hypot(xx-o.x,yy-o.y)<=2.7 && ['tree','rock','bush'].includes(grid[yy][xx]))grid[yy][xx]='grass';
+}
+for(const e of entrances){
+ for(let yy=Math.max(1,e.y-5);yy<=Math.min(H-2,e.y+5);yy++)
+  for(let xx=Math.max(1,e.x-5);xx<=Math.min(W-2,e.x+5);xx++)
+   if(Math.hypot(xx-e.x,yy-e.y)<4.8 && ['tree','rock','bush'].includes(grid[yy][xx]))grid[yy][xx]='grass';
+}
+// Two extra walkable cross-country shortcuts through the densest forests.
+route([36,54],[62,54],1);route([101,57],[129,57],1);
+// A narrow central crossing over the main river, using existing walkable path tiles.
+route([69,53],[86,53],1);
+
 export const landmarks=[{x:7,y:7,name:'Landsbyen'},{x:50,y:19,name:'Skogstien'},{x:87,y:28,name:'Elvedalen'},{x:130,y:40,name:'Nordskogen'},{x:155,y:95,name:'Ruinene'},{x:28,y:110,name:'Magisk lysning'}];
 export function tile(x,y){return grid[Math.floor(y)]?.[Math.floor(x)]||'water'}
 export function walkable(x,y){return !['water','tree','rock'].includes(tile(x,y))}
@@ -51,9 +102,9 @@ export function region(x,y){if(x>115&&y>72)return 'Steinruinene';if(y>75)return 
 import { asset, pattern, ready } from './graphics.js';
 const dims={tree_oak:[155,150],tree_spruce:[112,155],tree_birch:[145,157],tree_blossom:[157,148],bush_berries:[79,62],rock_moss:[90,62]};
 const questArt=['chest','crystal','runestone','magic_book','quest_board','magic_mushroom','locked_gate','star_altar'];
-const buildingArt={home:'building_home',library:'building_library',maze:'building_school',tower:'building_wizard_tower',cave:'building_castle',shop:'building_shop',school:'building_school',castle:'building_castle'};
+const buildingArt={home:'building_home',library:'building_library',maze:'building_school',tower:'building_wizard_tower',cave:'building_echo_cave',shop:'building_shop',school:'building_school',castle:'building_castle'};
 const artType=t=>({chest:0,crystal:1,rune:2,bell:3,portal:4})[t]??0;
-export function drawWorld(ctx,camera,time,done){
+export function drawWorld(ctx,camera,time,done,statusFor){
  const w=ctx.canvas.width,h=ctx.canvas.height;
  // Draw terrain in world coordinates so its texture follows camera movement.
  ctx.save();
@@ -74,7 +125,7 @@ export function drawWorld(ctx,camera,time,done){
     ctx.restore();
   }
   if(t==='tree'||t==='rock'||t==='bush'){
-    const species=x<33?'birch':x<70?'spruce':x<106?'oak':x<143?'blossom':'spruce';
+    const species=x<34&&y<42?'birch':x<85&&y<75?'spruce':x<91?'oak':x<148&&y<81?'blossom':x>145?'spruce':'oak';
     const type=t==='tree'?'tree_'+species:t==='rock'?'rock_moss':'bush_berries';
     draw.push({kind:'nature',type,x:(x+.5)*TILE-camera.x,y:(y+.9)*TILE-camera.y,depth:y+.9});
   }
@@ -88,6 +139,6 @@ export function drawWorld(ctx,camera,time,done){
   if(o.kind==='nature'){const [ww,hh]=dims[o.type];asset(ctx,o.type,o.x,o.y,ww,hh);}
   else if(o.kind==='detail')asset(ctx,o.type,o.x,o.y,40,35);
   else if(o.kind==='building')asset(ctx,o.type,o.x,o.y,o.type==='building_castle'?260:205,o.type==='building_castle'?235:175);
-  else {asset(ctx,o.type,o.x,o.y,57,53);const complete=!!done[o.p.id];const s=complete?'status_done':(o.p.id%13===0?'status_special':'status_new');const bob=complete?0:Math.sin(time/320+o.p.id)*4;asset(ctx,s,o.x,o.y-51+bob,31,31);}
+  else {asset(ctx,o.type,o.x,o.y,57,53);const st=statusFor?statusFor(o.p):{kind:done[o.p.id]?'done':'new',remaining:0};const icon=st.kind==='cooldown'?'status_cooldown':st.kind==='retry'?'status_retry':st.kind==='done'?'status_done':(o.p.id%13===0?'status_special':'status_new');const bob=st.kind==='done'||st.kind==='cooldown'?0:Math.sin(time/320+o.p.id)*4;asset(ctx,icon,o.x,o.y-51+bob,31,31);if(st.kind==='cooldown'){ctx.fillStyle='#40374b';ctx.beginPath();ctx.arc(o.x,o.y-71+bob,7,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(String(st.remaining),o.x,o.y-67+bob);}}
  }
 }

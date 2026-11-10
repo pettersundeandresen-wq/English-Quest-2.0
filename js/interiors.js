@@ -1,3 +1,4 @@
+import { asset } from './graphics.js';
 // Four explorable interior maps. The 56 quests here use IDs 124–179.
 // These IDs are not duplicated outdoors, and all saved progress is preserved.
 export const indoorDefinitions = [
@@ -42,9 +43,9 @@ function makeMap(def, index){
   return {...def,w:WIDTH,h:HEIGHT,tiles,objects,exit:{x:15,y:19},spawn:{x:15.5,y:18.5},reachable};
 }
 export const interiors=Object.fromEntries(indoorDefinitions.map((d,i)=>[d.id,makeMap(d,i)]));
-export const indoorObjects=indoorDefinitions.flatMap(d=>interiors[d.id].objects);
+export const indoorObjects=indoorDefinitions.flatMap(d=>interiors[d.id].objects); // updated below via allIndoorQuests
 export function indoorWalkable(map,x,y){return map.tiles[Math.floor(y)]?.[Math.floor(x)]==='floor';}
-export function drawInterior(ctx,camera,time,map,done,tileSize=40){
+export function drawInterior(ctx,camera,time,map,done,tileSize=40,statusFor){
   const w=ctx.canvas.width,h=ctx.canvas.height;
   ctx.fillStyle='#151f2a';ctx.fillRect(0,0,w,h);
   const x0=Math.max(0,Math.floor(camera.x/tileSize)-1),x1=Math.min(map.w,Math.ceil((camera.x+w)/tileSize)+1);
@@ -63,12 +64,18 @@ export function drawInterior(ctx,camera,time,map,done,tileSize=40){
   }
   const ex=map.exit;
   ctx.font='27px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('🚪',(ex.x+.5)*tileSize-camera.x,(ex.y+.5)*tileSize-camera.y);
+  asset(ctx, map.id==='castle'?'door_castle':map.id==='tower'?'portal_magic':'door_wood',(ex.x+.5)*tileSize-camera.x,(ex.y+1)*tileSize-camera.y,52,70);
   for(const p of map.objects){
     const px=(p.x+.5)*tileSize-camera.x,py=(p.y+.5)*tileSize-camera.y;
     if(px<-40||py<-40||px>w+40||py>h+40)continue;
-    const completed=!!done[p.id];ctx.font='27px system-ui';ctx.fillText(completed?{chest:'📭',crystal:'◈',rune:'▣',bell:'🔕',portal:'◌'}[p.type]:{chest:'🎁',crystal:'💎',rune:'🪨',bell:'🔔',portal:'🌀'}[p.type],px,py);
-    ctx.fillStyle=completed?'#e2ffed':'#fff4a4';ctx.font='bold 17px system-ui';ctx.fillText(completed?'✓':'!',px+14,py-17);
+    const completed=!!done[p.id];ctx.font='27px system-ui';asset(ctx,({chest:'chest',crystal:'crystal',rune:'runestone',bell:'magic_book',portal:'star_altar'}[p.type]||'chest'),px,py+20,48,48);
+    const st=statusFor?statusFor(p):{kind:completed?'done':'new',remaining:0};
+    const statusName=st.kind==='cooldown'?'status_cooldown':st.kind==='retry'?'status_retry':st.kind==='done'?'status_done':'status_new';
+    asset(ctx,statusName,px,py-21+(st.kind==='new'?Math.sin(time/320+p.id)*3:0),30,30);
+    if(st.kind==='cooldown'){
+      ctx.fillStyle='#40374b';ctx.beginPath();ctx.arc(px,py-42,7,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#fff';ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(String(st.remaining),px,py-38);
+    }
   }
   ctx.font='bold 17px system-ui';ctx.textAlign='left';ctx.fillStyle='#ffffff';ctx.fillText(map.icon+' '+map.name,14,25);
 }
@@ -87,16 +94,27 @@ for(const [id,name,icon,floor,wall] of [
  interiors[id]={id,name,icon,floor,wall,accent:'#e9d7ac',seed:43,w:25,h:19,tiles,objects:[],exit:{x:12,y:16},spawn:{x:12.5,y:15.5}};
 }
 
+// Transfer 12 existing quest IDs into school and castle. Total stays 180.
+// The other 44 indoor quests retain their IDs and locations.
+for(const [from,to] of [['maze','school'],['cave','castle']]){
+ const moved=interiors[from].objects.splice(-6);
+ const positions=[[6,6],[12,6],[18,6],[6,10],[12,10],[18,10]];
+ moved.forEach((o,i)=>{o.x=positions[i][0];o.y=positions[i][1];});
+ interiors[to].objects.push(...moved);
+}
+export const allIndoorQuests=Object.values(interiors).flatMap(m=>m.objects);
+
 export function drawInteriorFurniture(ctx,camera,map,tileSize=40){
  const furniture={
-  home:[['bed',5,6],['bookshelf',20,5],['rug_purple',12,10],['sofa',7,12]],
+  home:[['bed',5,6],['bookshelf',20,5]],
   library:[['bookshelf',5,5],['bookshelf',23,5],['writing_desk',15,8]],
-  shop:[['wardrobe',5,6],['bookshelf',20,6],['storage_chest',8,12],['table_flowers',18,11]],
-  school:[['writing_desk',6,6],['bookshelf',20,6],['chair',12,11]],
+  shop:[['wardrobe',5,6],['bookshelf',20,6],['storage_chest',8,12]],
+  school:[['writing_desk',6,6],['bookshelf',20,6],['chair',12,11],['chair',17,11]],
   castle:[['sofa',6,6],['rug_purple',12,10],['bookshelf',20,5]],
   tower:[['writing_desk',6,6],['bookshelf',20,6]],
   maze:[['bookshelf',5,5]],cave:[['storage_chest',6,6]]
  };
+ if(map.id==='shop')asset(ctx,'shop_counter',18.5*tileSize-camera.x,13.5*tileSize-camera.y,145,118);
  for(const [name,x,y] of furniture[map.id]||[]){const im=indoorAssets[name];if(im?.naturalWidth)ctx.drawImage(im,x*tileSize-camera.x-32,y*tileSize-camera.y-66,65,65);}
 }
 const indoorAssets={};for(const name of ['bed','bookshelf','rug_purple','sofa','wardrobe','storage_chest','table_flowers','writing_desk','chair']){const im=new Image();im.src='./assets/furniture/basic/'+name+'.png';indoorAssets[name]=im;}
