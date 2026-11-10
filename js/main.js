@@ -77,14 +77,12 @@ function registerAnswer(id, type, correct) {
             delete state.cooldowns[key];
         }
     }
-    const key = taskKey(id);
-    if (correct) {
-        delete state.cooldowns[key];
-        for (const old of Object.keys(state.cooldowns)) if (old.startsWith(currentId+':')) delete state.cooldowns[old];
-    } else {
-        // Feil på nytt starter en ny sperre på fem andre verb.
-        state.cooldowns[key] = { otherVerbs: [] };
+    // Start ny sperre etter ethvert svar, riktig eller feil.
+    // Sperren gjelder verb-ID-en på tvers av verden og ordbok.
+    for (const old of Object.keys(state.cooldowns)) {
+        if (old.startsWith(currentId + ':')) delete state.cooldowns[old];
     }
+    state.cooldowns[taskKey(id)] = { otherVerbs: [] };
     persist();
 }
 
